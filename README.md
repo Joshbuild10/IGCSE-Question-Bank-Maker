@@ -37,6 +37,8 @@ the list accepts multiple search strings (allowing for multiple conditions to be
 The similarity index determines how exact the matches should be, 1 being an exact match, and 0 being any match.
 For words with different spellings/tenses 0.8 would generally be a good place to put the similarity index at.
 The command will return a list of the filepath all the papers that contain the search string.
+Note: the column name is the column of the database you want to the search string to be found in, these are the valid
+columns that can currently be search: "subject_code", "year", "season", "paper", question", "filename", "text"
 
 The merge function then takes the list of files and compiles them into a single pdf, which can be found in the "output"
 file as provided in the example.
