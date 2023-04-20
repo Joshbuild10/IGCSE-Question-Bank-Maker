@@ -24,18 +24,18 @@ class Merge:
     # Merges all pages into one pdf, allowing for multiple smaller pages to be merged into one A4 page
     def mergePages(self):
         writer = PdfWriter()
-        temp_page = PdfWriter().add_blank_page(height=PaperSize.A4.height, width=PaperSize.A4.width)
+        buffer_page = PdfWriter().add_blank_page(height=PaperSize.A4.height, width=PaperSize.A4.width)
         height = self.border
         page_number = 0
 
-        for rawpage in self.pages:
-            page = copy.deepcopy(rawpage["page"])
+        for raw_page in self.pages:
+            page = copy.deepcopy(raw_page["page"])
             cur_height = page.cropbox[3] - page.cropbox[1]
 
             # If the current page is too big to fit on the current page, add a new page
             if (cur_height + height) > PaperSize.A4.height:
-                writer.add_page(temp_page)
-                temp_page = PdfWriter().add_blank_page(height=PaperSize.A4.height, width=PaperSize.A4.width)
+                writer.add_page(buffer_page)
+                buffer_page = PdfWriter().add_blank_page(height=PaperSize.A4.height, width=PaperSize.A4.width)
                 height = self.border
                 page_number += 1
 
@@ -58,11 +58,16 @@ class Merge:
             page.artbox = page.mediabox = page.bleedbox = page.trimbox = page.cropbox
 
             # Merge the page into the current page and update the height (with padding)
-            temp_page.merge_page(page)
+            buffer_page.merge_page(page)
             height += cur_height + 10
 
+            # Print statement to show progress
+            print(f"\r{raw_page['filename']} on page {page_number} loaded into pdf", end=" ")
+
         # Add the last page
-        writer.add_page(temp_page)
+        writer.add_page(buffer_page)
+
+        print("\n All pages loaded into pdf", end=" ")
 
         # Write the merged pdf to the output file
         with open(self.output, "wb") as fp:
