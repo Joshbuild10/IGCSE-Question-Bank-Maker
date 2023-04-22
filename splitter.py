@@ -3,6 +3,7 @@ import copy
 import os
 import csv
 import io
+import re
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
@@ -185,8 +186,8 @@ class Split:
         y = int(tm[5])
 
         try:
-            # Extracts digits from the text
-            numbers = ''.join(map(str, [int(i) for i in text if i.isdigit()]))
+            # Extracts first sequence of digits from text
+            numbers = (re.search(r"\d+", text).group()) if re.search(r"\d+", text) else ""
         except:
             print("Error extracting digits")
             return
