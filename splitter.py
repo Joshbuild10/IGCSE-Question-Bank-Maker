@@ -1,12 +1,10 @@
-from pypdf import PdfWriter, PdfReader, Transformation, PaperSize
+import fitz
 import copy
 import os
 import csv
 import io
 import re
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-
+import itertools
 
 # Class to split a pdf into individual questions and store them in a csv file
 class Split:
@@ -22,18 +20,18 @@ class Split:
 
         path_num = len(self.paths)
         for index, path in enumerate(self.paths):
-            # print(path)
-            self.writer = PdfWriter()
-            self.reader = PdfReader(path)
-            self.questionArr, self.paper, self.rows = [], [], []
+            self.reader = fitz.open(path)
+            self.questions, self.rows = [], []
+            self.blankPages = []
             self.info = {}
-            self.text = ""
-            self.curCoords = {"y1": 0, "y2": 0}
-            self.border = 45
+            self.border = 50
+            self.padding = 10
             self.extract_questions()
             if not self.check_order():
                 print(path, "Error loading all questions")
                 continue
+            self.compute_crop()
+            self.trim_page()
             self.get_info(path)
             self.split_questions()
             self.to_csv()
@@ -44,6 +42,7 @@ class Split:
         print("\nFinished loading all papers into database")
         # Clear duplicates from the csv file
         clear_duplicates()
+
 
     def crawl(self, path):
         rootdir = os.fsencode(path)
@@ -59,97 +58,179 @@ class Split:
                         if filepath.endswith(".pdf") and "qp" in filepath:
                             self.paths.append(filepath)
 
+
+    def make_text(self, words):
+        """Return textstring output of get_text("words").
+
+        Word items are sorted for reading sequence left to right,
+        top to bottom.
+        """
+        # Group words by their rounded bottom coordinate
+        line_dict = {}
+
+        # Sort by horizontal coordinate
+        for x, _, _, y, word, _, _, _ in sorted(words):
+            # Appends words to list of words approximately in the same line
+            line_dict.setdefault(round(y, 1), []).append(word)
+        
+        # Join words in each line and sort lines vertically
+        lines = ["".join(words) for _, words in sorted(line_dict.items())]
+
+        return "".join(lines).upper()
+
+    # Locates the questions in the paper
+    def locate_questions(self, page, page_number):
+        # The area to search for the question number
+        rect = fitz.Rect(0, 50, 60, page.rect.y1)
+        page_dict = page.get_text("dict")
+
+        # Extracts the bold text within the boundary
+        bold_spans = [span for block in page_dict["blocks"] if block["type"] == 0 # text blocks
+                        for line in block["lines"] # text lines
+                        for span in line["spans"] # text spans
+                        if (span["flags"] & 2**4)# bold text
+                        if fitz.Rect(span["bbox"]).intersects(rect)] # within boundary
+
+        questions = []
+        for a in bold_spans:
+            if (any(char.isdigit() for char in a["text"]) 
+                and (len(questions) == 0 
+                    or int(re.search(r'\d+', a["text"]).group()) == (int(questions[-1]['question_num']) + 1))):
+                questions += [{'question_num': re.search(r'\d+', a["text"]).group(), 
+                                'bbox': [round(n) for n in a["bbox"]], 
+                                'page': page_number} ]
+
+        return questions
+
+    # Flag blank pages    
+    def flag_blank(self, page):
+        # List of words to search for
+        wordList = ["BLANK PAGE", "ADDITIONAL PAGE", "Mathematical Formulae",
+                    "TURN PAGE FOR QUESTION", "printed on the next page"]
+
+        for word in wordList:
+            temp = page.search_for(word)
+            if len(temp) > 0:
+                return True
+        
+    # Extracts the location of the questions in the paper
     def extract_questions(self):
-        for page, content in enumerate(self.reader.pages):
-            self.flag = 0
-            content.extract_text(visitor_text=self.flag_blank)
-            if not self.flag:
-                self.newPage = len(self.paper)
-                content.extract_text(visitor_text=self.locate_questions)
-                self.paper.append(copy.deepcopy(self.reader.pages[page]))
+        questions = []
+        for page_number, content in enumerate(self.reader):
+
+            if not (self.flag_blank(content) or page_number == 0):
+                # Adds the page of the question to the question object
+                self.questions += self.locate_questions(content, page_number)
+
+            else:
+                self.blankPages.append(page_number)
 
     # Gets the name and info of the paper from the filename
     def get_info(self, path):
         # Gets the info from the filename
-        temp_info = path[path.rfind(os.sep) + 1: -4].upper().split('_')
+        temp_info = path[max([path.rfind(char) for char in ['\\', '/']]) + 1: -4].upper().split('_')
 
         # Stores the info in a dictionary
-        self.info = {"subject_code": temp_info[0], "year": f"20{temp_info[1][1:]}", "season": temp_info[1][0],
-                     "paper": temp_info[3], "name": f"{temp_info[0]}_{temp_info[1]}_{temp_info[3]}"}
+        self.info = {
+            "subject_code": temp_info[0],
+            "year": f"20{temp_info[1][1:]}",
+            "season": temp_info[1][0],
+            "paper": temp_info[3][0],
+            "variant": temp_info[3][1:],
+            "name": f"{temp_info[0]}_{temp_info[1]}_{temp_info[3]}"}
+        
+    def compute_crop(self):
+        dimensions = {"height": self.reader[0].rect.y1, "width": self.reader[0].rect.x1}
 
+        for index, question in enumerate(self.questions):
+            
+            # Stores the area of the questions
+            self.questions[index]["questionArea"] = []
+
+            # Stores the next question if it exists else stores the last page of the paper
+            if index < (len(self.questions) - 1):
+                next_question = self.questions[index + 1]
+            else:
+                next_question = {"bbox": [0, 0, 0, 0], "page": len(self.reader)}
+            
+            offset = 0
+            
+            while (question["page"] + offset) <= next_question["page"]:
+                y_coord = []
+
+                if not ((question["page"] + offset) in self.blankPages):
+
+                    y_coord = [question["bbox"][1] - self.padding if offset == 0 else self.border,
+                                next_question["bbox"][1] - self.padding if (question["page"] + offset) == next_question["page"] 
+                                    else dimensions["height"] - self.border]
+
+                    if not (next_question["bbox"][1] < 75 and (question["page"] + offset) == next_question["page"]):
+                        self.questions[index]["questionArea"].append({"y_coord": y_coord, "page_number": question["page"] + offset})
+
+                offset += 1
+
+    # Removes excess space where no text is present
+    def trim_page(self):
+        text = [self.reader[page].get_text("dict") for page in range(len(self.reader))]
+        drawings = [self.reader[page].get_drawings() for page in range(len(self.reader))]
+        for question in self.questions:
+            for area in question["questionArea"]:
+                page = self.reader[area["page_number"]]
+                rect = fitz.Rect(0, area["y_coord"][0], page.rect.x1, area["y_coord"][1])
+                regiontext = [block for block in text[area["page_number"]]["blocks"]
+                                                    if fitz.Rect(block["bbox"]).intersects(rect)]
+                regiondrawing = [box["rect"] for box in drawings[area["page_number"]]
+                                    if box["stroke_opacity"] != None
+                                        and (fitz.Rect(box["rect"]) in rect)]
+                
+                proposedy = [min([x["bbox"][1] for x in regiontext] + [x.y1 for x in regiondrawing]) - self.padding,
+                                max([x["bbox"][3] for x in regiontext] + [x.y1 for x in regiondrawing]) + self.padding]
+                area["y_coord"] = [max(area["y_coord"][0], proposedy[0]), min(area["y_coord"][1], proposedy[1])]
+                
     # Splits the questions into individual pdfs
     def split_questions(self):
 
+        width, height = fitz.paper_size("a4")
         # Iterates through all questions and splits them into individual pdfs
-        for index, question in enumerate(self.questionArr):
-            self.text = ""
-            curPdf = PdfWriter()
-            questionNum = question["question"]
-            nextQuestion = self.questionArr[index + 1] if index < (len(self.questionArr) - 1) else {"y": self.border,
-                                                                                                    "page": len(
-                                                                                                        self.paper) - 1}
-            filename = f"questions{os.sep}{self.info['subject_code']}{os.sep}{self.info['year']}{os.sep}{self.info['name']}-Q{questionNum}.pdf"
+        for index, question in enumerate(self.questions):
 
-            # Creates a temporary pdf for the text at the side
-            packet = io.BytesIO()  # Create a buffer for the new PDF
-            can = canvas.Canvas(packet, pagesize=A4)  # Create a canvas object
-            can.rotate(90)  # Rotate the canvas 90 degrees
-            can.drawString(10, -15, f"{self.info['name']}-Q{questionNum}")  # Draw the text at a rotated position
-            can.save()  # Save the canvas
-            packet.seek(0)  # Move to the beginning of the buffer
-            label_pdf = PdfReader(packet)  # Create a new PDF with reportlab
+            filename = f"questions{os.sep}{self.info['subject_code']}{os.sep}{self.info['year']}{os.sep}{self.info['name']}-Q{question['question_num']}.pdf"
+            output = fitz.open()
+            text = ""
 
-            # Iterates through all pages between the current and next question and adds them to the pdf (trimming as needed)
-            for i in range(question["page"], nextQuestion["page"] + (1 if (nextQuestion["y"] < 700) else 0)):
-                cur_page = copy.deepcopy(self.paper[i])
 
-                # Trims the page to contain just the question
-                cur_page.mediabox.top = question["y"] + 10 if i == question[
-                    "page"] else cur_page.mediabox.top - self.border
-                cur_page.mediabox.bottom = nextQuestion["y"] if i == nextQuestion[
-                    "page"] else cur_page.mediabox.bottom + self.border
+            for area in question["questionArea"]:
 
-                # Sets the width to A4 size
-                cur_page.mediabox.right = PaperSize.A4.width
+                # Defines the area to be cropped and the area to be outputted
+                cropbox = fitz.Rect(0, area["y_coord"][0], width, area["y_coord"][1])
+                outbox = fitz.Rect(0, 0, width, cropbox.y1 - cropbox.y0)
 
-                self.curCoords["y1"] = cur_page.mediabox.top
-                self.curCoords["y2"] = cur_page.mediabox.bottom
+                # Creates a new page and crops the area needed
+                outPage = output.new_page(-1, width = outbox.x1, height = max(outbox.y1, 90))
+                outPage.show_pdf_page(outbox, self.reader, area["page_number"], clip = cropbox)
 
-                # Extracts the text from the page, so it can be stored in the database
-                cur_page.extract_text(visitor_text=self.page_text)
+                outPage.insert_text(fitz.Point(5, 2), 
+                                    f"{self.info['name']}-Q{question['question_num']}",
+                                      fontsize=10, 
+                                      rotate=-90)
 
-                # Transforms the page so it's aligned to bottom
-                cur_page.add_transformation(Transformation().translate(tx=0, ty=-cur_page.mediabox.bottom))
-
-                # Adjusts mediabox accordingly
-                cur_page.mediabox.top -= cur_page.mediabox.bottom
-                cur_page.mediabox.bottom -= cur_page.mediabox.bottom
-
-                # Sets all other boxes to match the mediabox
-                cur_page.cropbox = cur_page.bleedbox = cur_page.artbox = cur_page.trimbox = cur_page.mediabox
-
-                curPdf.add_page(cur_page)
-
-            # Compresses the pages in the pdf to reduce file size using compress_content_streams
-            for page in curPdf.pages:
-                page.merge_page(label_pdf.pages[0])
-                page.compress_content_streams()
+                text += self.make_text(self.reader[area["page_number"]].get_text("words", clip = cropbox))
 
             os.makedirs(os.path.dirname(filename), exist_ok=True)
 
             try:
                 # Outputs to file with appropriate name
-                with open(filename, "wb") as fp:
-                    curPdf.write(fp)
+                output.save(filename, garbage=4, deflate=True)
 
                 self.rows.append({
                     "subject_code": self.info['subject_code'],
                     "year": self.info['year'],
                     "season": self.info['season'],
                     "paper": self.info['paper'],
-                    "question": questionNum,
+                    "variant": self.info['variant'],
+                    "question": question['question_num'],
                     "filename": filename,
-                    "text": self.text
+                    "text": text
                 })
             except:
                 print(f"Error: Could not write to file {filename}")
@@ -157,7 +238,7 @@ class Split:
     # Writes paper info to the database
     def to_csv(self):
 
-        headers = ["subject_code", "year", "season", "paper", "question", "filename", "text"]
+        headers = ["subject_code", "year", "season", "paper", "variant", "question", "filename", "text"]
 
         isExist = os.path.exists(f"questions{os.sep}database.csv")
         with open(f"questions{os.sep}database.csv", "a", newline='', encoding="utf-8") as csvfile:
@@ -166,64 +247,21 @@ class Split:
                 cwriter.writeheader()
             cwriter.writerows(self.rows)
 
-    # Removes blank and additional pages from the document
-    def flag_blank(self, text, cm, tm, fontDict, fontSize):
-        x = int(tm[4])
-        y = int(tm[5])
-
-        # Removes all whitespace and makes text uppercase
-        text = text.replace(" ", "").upper()
-
-        # Checks conditions for a blank/additional page
-        if ((0 < len(text))
-                and (("BLANKPAGE" in text) or ("ADDITIONALPAGE" in text))
-                and "Bold" in fontDict['/BaseFont']):
-            self.flag = 1
-
-    # Locates question numbers, and stores their positions in an array
-    def locate_questions(self, text, cm, tm, fontDict, fontSize):
-        x = int(tm[4])
-        y = int(tm[5])
-
-        try:
-            # Extracts first sequence of digits from text
-            numbers = (re.search(r"\d+", text).group()) if re.search(r"\d+", text) else ""
-        except:
-            print("Error extracting digits")
-            return
-
-        if (
-                (0 < len(numbers) < 3)
-                and x < 120
-                and (self.border <= y <= self.reader.pages[0].mediabox.top - 40)
-                and "Bold" in fontDict['/BaseFont']
-                and (text[0].isnumeric()
-                     or ("Question" in text and len(text) < 12)
-                     or text[len(text) - 1].isnumeric())):
-            if ((len(self.questionArr) > 0) and (int(self.questionArr[-1]["question"]) == (int(numbers) - 1))
-                    or (len(self.questionArr) == 0 and int(numbers) == 1)):
-                self.questionArr.append({
-                    "question": numbers,
-                    "x": x,
-                    "y": y,
-                    "page": self.newPage})
-
-    def page_text(self, text, cm, tm, fontDict, fontSize):
-        y = int(tm[5])
-        if self.curCoords["y2"] < y < self.curCoords["y1"]:
-            self.text += "".join(text.split()).upper()
 
     # Function to check if the question numbers are in numerical order, if not throw an error
     def check_order(self):
-        length = len(self.questionArr)
-        for i in range(1, length):
-            if int(self.questionArr[i]["question"]) != (int(self.questionArr[i - 1]["question"]) + 1):
-                print("Error: Question numbers are not in order")
-                return False
+        if len(self.questions) == 0:
+            print("Error: No questions found in paper")
+            return False
+        
+        priorQuestion = self.questions[0]["question_num"]
 
-            elif len(self.questionArr) == 0:
-                print("Error: No questions found")
+        for question in self.questions[1:]:
+            if int(question["question_num"]) != (int(priorQuestion) + 1) or len(self.questions) == 0:
+                print("Error: Question numbers are not in order", [question["question_num"] for question in self.questions])
                 return False
+            priorQuestion = question["question_num"] 
+
         return True
 
 
