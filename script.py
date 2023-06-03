@@ -16,7 +16,7 @@ isLoading = input(r"Do you want to query any loaded papers? (y/n): ")
 
 if isLoading == "y":
     inputString = input(r"Enter a search string with the example format: text=trophic level, similarity=0.9  AND "
-                        r"subject_code=0610, similarity=1" + "\n")
+                        r"subject_code=0610" + "\n")
 
     # Queries the database for all papers that contain the search string with a given similarity index
     source = Query("questions/database.csv", ParseInput(inputString))

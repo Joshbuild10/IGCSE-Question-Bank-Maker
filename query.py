@@ -63,7 +63,10 @@ def ParseInput(inputString):
     query = []
     for parameter in inputString.split("AND"):
         temp_condition = parameter.split(",")
-        condition = {"COLUMN_NAME": temp_condition[0].split('=')[0], "SEARCH_STRING": temp_condition[0].split('=')[1],
-                 "SIMILARITY": float(temp_condition[1].split('=')[1])}
+        condition = {"COLUMN_NAME": temp_condition[0].split('=')[0], "SEARCH_STRING": temp_condition[0].split('=')[1]}
+        if len(temp_condition) > 1:
+            condition["SIMILARITY"] = float(temp_condition[1].split('=')[1])
+        else:
+            condition["SIMILARITY"] = 1
         query.append(condition)
     return query
