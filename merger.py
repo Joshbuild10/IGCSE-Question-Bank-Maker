@@ -1,6 +1,6 @@
 from pypdf import PdfWriter, PdfReader, Transformation, PaperSize
 import copy
-
+import fitz
 
 # Class to merge multiple source pdfs into one pdf
 class Merge:
@@ -8,67 +8,54 @@ class Merge:
         self.border = 20
         self.sources = sources
         self.output = outputPath
-        self.pages = []
+        self.name_tracker = []
+        self.tmpPdf = fitz.open()
+        self.spacing = 0
         self.loadPages()
         self.mergePages()
 
     # Loads all pages from the sources into the pages array
     def loadPages(self):
-        self.sources.sort(key=lambda x: len(PdfReader(x).pages))
+        self.sources.sort(key=lambda x: len(fitz.open(x)))
         for paper in self.sources:
-            reader = PdfReader(paper)
-            for page in reader.pages:
-                page.cropbox = page.mediabox
-                self.pages.append({"page": page, "filename": paper})
+            reader = fitz.open(paper)
+            self.tmpPdf.insert_pdf(reader)
+            for page in reader:
+                self.name_tracker.append(paper)
 
     # Merges all pages into one pdf, allowing for multiple smaller pages to be merged into one A4 page
     def mergePages(self):
-        writer = PdfWriter()
-        buffer_page = PdfWriter().add_blank_page(height=PaperSize.A4.height, width=PaperSize.A4.width)
         height = self.border
+        pwidth, pheight = fitz.paper_size("a4")
         page_number = 0
+    
+        writer = fitz.open()
+        out_page = writer.new_page(-1, width = pwidth, height = pheight)
 
-        for raw_page in self.pages:
-            page = copy.deepcopy(raw_page["page"])
-            cur_height = page.cropbox[3] - page.cropbox[1]
+        for index, input_page in enumerate(self.tmpPdf):
+            
+            # Get the height and rectangle of the current page
+            cropbox = input_page.rect
+            cur_height = cropbox.y1 - cropbox.y0
 
             # If the current page is too big to fit on the current page, add a new page
-            if (cur_height + height) > PaperSize.A4.height:
-                writer.add_page(buffer_page)
-                buffer_page = PdfWriter().add_blank_page(height=PaperSize.A4.height, width=PaperSize.A4.width)
+            if (cur_height + height) > pheight:
+                out_page = writer.new_page(-1, width = pwidth, height = pheight)
                 height = self.border
                 page_number += 1
-
-            # Offset to determine the right position on the page relative to the top
-            offset = (PaperSize.A4.height - height) - page.cropbox[3]
-
-            # Print statement to debug values, and page data
-            # print(
-            #    f"Page {page_number} qheight: {cur_height}, pageheight: {height}, offset: {offset}, cropbox: {page.cropbox},"
-            #    f" filename: {rawpage['filename']}")
-
-            # Add the transformation to the page to position it correctly
-            page.add_transformation(Transformation().translate(tx=0, ty=offset))
-
-            # Update the cropbox to match the new position
-            page.cropbox[3] += offset
-            page.cropbox[1] += offset
-
-            # Set all other boxes to match the cropbox
-            page.artbox = page.mediabox = page.bleedbox = page.trimbox = page.cropbox
-
-            # Merge the page into the current page and update the height (with padding)
-            buffer_page.merge_page(page)
-            height += cur_height + 10
+            
+            # Get the rectangle where the page will be placed
+            outbox = fitz.Rect(0, height, pwidth, height + cur_height)
+            # Add the page to the buffer page
+            out_page.show_pdf_page(outbox, self.tmpPdf, index, clip = cropbox)
+            
+            # Update the height
+            height += cur_height + self.spacing
 
             # Print statement to show progress
-            print(f"\r{raw_page['filename']} on page {page_number} loaded into pdf", end=" ")
-
-        # Add the last page
-        writer.add_page(buffer_page)
+            print(f"\r{self.name_tracker[index]} on page {page_number} loaded into pdf", end=" ")
 
         print("\n All pages loaded into pdf", end=" ")
 
         # Write the merged pdf to the output file
-        with open(self.output, "wb") as fp:
-            writer.write(fp)
+        writer.save(self.output, garbage=4, deflate=True, clean=True)
