@@ -183,8 +183,11 @@ class Split:
                                     if box["stroke_opacity"] != None
                                         and (fitz.Rect(box["rect"]) in rect)]
                 
-                proposedy = [min([x["bbox"][1] for x in regiontext] + [x.y1 for x in regiondrawing]) - self.padding,
-                                max([x["bbox"][3] for x in regiontext] + [x.y1 for x in regiondrawing]) + self.padding]
+                try:
+                    proposedy = [min([x["bbox"][1] for x in regiontext] + [x.y1 for x in regiondrawing]) - self.padding,
+                                    max([x["bbox"][3] for x in regiontext] + [x.y1 for x in regiondrawing]) + self.padding]
+                except:
+                    return
                 area["y_coord"] = [max(area["y_coord"][0], proposedy[0]), min(area["y_coord"][1], proposedy[1])]
                 
     # Splits the questions into individual pdfs

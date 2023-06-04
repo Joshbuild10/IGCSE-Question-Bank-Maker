@@ -23,3 +23,6 @@ if isLoading == "y":
 
     # Merges all the papers that match the query into one pdf
     Merge(source, "test.pdf")
+
+# Asks the user to press enter to exit the program
+input("Press enter to exit the program")

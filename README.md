@@ -12,7 +12,7 @@ The following python packages are going to need to be installed if running scrip
 pymupdf
 
 ### Usage
-To run the program, simply run the script.py file.
+To run the program, simply run the script.exe file or script.py (if you have a python compiler).
 The program will ask if you want to load new papers contained in the papers folder, or use the ones already loaded.
 Afterwards, it will ask you if you want to query the papers to be compiled into a single pdf.
 If you choose to do so, you will be asked to provide the query in the format displayed.
@@ -33,8 +33,8 @@ questions\0610\2020\0610_S20_41-Q5.pdf on page 45 loaded into pdf
 ```
 
 ### Loading new papers
-To load new papers, simply place them in the papers folder and run the script.py file.
-Select the yes option when prompted to load new papers.
+To load new papers, simply place them in the papers folder and run the script.py/script.exe file.
+Type y when prompted to load new papers.
 The program will then load all the papers in the papers folder into the database.
 The program will only load papers that are not already in the database,
 so you can run the program multiple times on the same folder without worrying about duplicates.
@@ -43,7 +43,7 @@ As the papers are loads, a message will be displayed showing the progress of the
 Any papers that failed to load will be printed to console.
 
 ### Querying papers
-To query papers, select the yes option when prompted to query papers.
+To query papers, type the y when prompted to query papers.
 The program will then ask you to enter a query in the format displayed.
 The format goes ```<column_name>=<value>, similarity=<value> AND <column_name>=<value>, similarity=<value> ...```
 

@@ -157,3 +157,5 @@ venv
 .idea
 
 test.pdf
+script.spec
+build
